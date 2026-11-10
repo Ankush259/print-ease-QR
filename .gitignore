@@ -1,0 +1,12 @@
+# Python & FastAPI
+venv/
+__pycache__/
+*.pyc
+.env
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Frontend
+node_modules/
+dist/
+.DS_Store
