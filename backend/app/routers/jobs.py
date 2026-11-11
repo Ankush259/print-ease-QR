@@ -182,3 +182,21 @@ def mark_job_as_paid(job_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(job)
     return job
+
+@router.patch("/{job_id}/complete", response_model=schemas.PrintJobResponse)
+def mark_job_as_completed(job_id: str, db: Session = Depends(get_db)):
+    """Marks a print job as COMPLETED and deletes the physical PDF for privacy."""
+    job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Print job not found.")
+
+    # Delete physical file from uploads/documents/ for privacy
+    filename = os.path.basename(job.file_path)
+    disk_path = os.path.join(DOCS_DIR, filename)
+    if os.path.exists(disk_path):
+        os.remove(disk_path)
+
+    job.print_status = "COMPLETED"
+    db.commit()
+    db.refresh(job)
+    return job
