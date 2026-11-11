@@ -4,12 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .database import engine, Base
 from . import models
-from .routers import shops
+from .routers import shops, jobs
 
 # Automatically create tables in XAMPP MySQL on startup
 Base.metadata.create_all(bind=engine)
 
 os.makedirs("uploads/qrcodes", exist_ok=True)
+os.makedirs("uploads/documents", exist_ok=True)
 
 app = FastAPI(
     title="PrintEase QR API",
@@ -29,6 +30,7 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="uploads"), name="static")
 
 app.include_router(shops.router)
+app.include_router(jobs.router)
 
 @app.get("/")
 def health_check():

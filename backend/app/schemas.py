@@ -28,3 +28,24 @@ class ShopResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+from datetime import datetime
+
+class PrintJobResponse(BaseModel):
+    job_id: str
+    shop_id: str
+    file_name: str
+    file_path: str
+    total_pages: int
+    page_range: str
+    copies: int
+    color_mode: str
+    sides: str
+    paper_size: str
+    calculated_amount: float
+    payment_status: str
+    print_status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
