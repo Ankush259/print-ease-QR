@@ -1,10 +1,9 @@
 import os
-import math
 import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 from PIL import Image
 from ..database import get_db
 from .. import models, schemas
@@ -15,15 +14,20 @@ DOCS_DIR = "uploads/documents"
 os.makedirs(DOCS_DIR, exist_ok=True)
 
 
-def parse_page_range_count(page_range_str: str, max_pages: int) -> int:
+def slice_pdf_pages(disk_path: str, page_range_str: str) -> int:
     """
-    Calculates how many pages are selected in a range like 'ALL' or '1-3, 5'.
+    Validates page_range_str (e.g. 'ALL' or '1-3, 5'), physically slices the PDF
+    on disk so only those pages remain for printing, and returns the page count.
     """
+    reader = PdfReader(disk_path)
+    max_pages = len(reader.pages)
+
     cleaned = page_range_str.strip().upper()
     if not cleaned or cleaned == "ALL":
         return max_pages
 
-    selected_pages = set()
+    selected_pages = []
+    seen = set()
     try:
         parts = cleaned.split(",")
         for part in parts:
@@ -32,17 +36,30 @@ def parse_page_range_count(page_range_str: str, max_pages: int) -> int:
                 start, end = map(int, part.split("-"))
                 if start < 1 or end > max_pages or start > end:
                     raise ValueError
-                selected_pages.update(range(start, end + 1))
+                for p in range(start, end + 1):
+                    if p not in seen:
+                        seen.add(p)
+                        selected_pages.append(p)
             else:
                 page = int(part)
                 if page < 1 or page > max_pages:
                     raise ValueError
-                selected_pages.add(page)
+                if page not in seen:
+                    seen.add(page)
+                    selected_pages.append(page)
     except ValueError:
+        os.remove(disk_path)
         raise HTTPException(
             status_code=400,
             detail=f"Invalid page range '{page_range_str}'. Document has {max_pages} pages."
         )
+
+    writer = PdfWriter()
+    for page_num in selected_pages:
+        writer.add_page(reader.pages[page_num - 1])
+
+    with open(disk_path, "wb") as out_file:
+        writer.write(out_file)
 
     return len(selected_pages)
 
@@ -54,9 +71,6 @@ def calculate_print_cost(
     sides: str,
     pricing: models.ShopPricing
 ) -> float:
-    """
-    Calculates total cost using the shop's custom per-page/sheet pricing.
-    """
     color_mode = color_mode.upper()
     sides = sides.upper()
 
@@ -64,8 +78,6 @@ def calculate_print_cost(
         rate = pricing.color_single_price if color_mode == "COLOR" else pricing.bw_single_price
         cost_per_copy = pages_to_print * rate
     elif sides == "DOUBLE":
-        # Double-sided pricing: pairs of pages use the duplex sheet rate,
-        # and any odd remaining page uses the single-sided rate.
         double_sheets = pages_to_print // 2
         rem_single_page = pages_to_print % 2
         if color_mode == "COLOR":
@@ -81,25 +93,22 @@ def calculate_print_cost(
 @router.post("/upload", response_model=schemas.PrintJobResponse)
 async def create_print_job(
     shop_id: str = Form(...),
-    color_mode: str = Form("BW"),       # BW or COLOR
-    sides: str = Form("SINGLE"),        # SINGLE or DOUBLE
+    color_mode: str = Form("BW"),
+    sides: str = Form("SINGLE"),
     copies: int = Form(1),
-    page_range: str = Form("ALL"),      # e.g., ALL or 1-3,5
+    page_range: str = Form("ALL"),
     paper_size: str = Form("A4"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    # 1. Verify shop & pricing exist
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id, models.Shop.is_active == True).first()
     if not shop or not shop.pricing:
         raise HTTPException(status_code=404, detail="Shop or shop pricing not found.")
 
-    # 2. Validate file extension
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in [".pdf", ".png", ".jpg", ".jpeg"]:
         raise HTTPException(status_code=400, detail="Only PDF, PNG, and JPG files are supported.")
 
-    # 3. Save uploaded file (convert images to PDF automatically for uniform printing)
     unique_id = str(uuid.uuid4())
     saved_filename = f"{unique_id}.pdf"
     disk_path = os.path.join(DOCS_DIR, saved_filename)
@@ -108,13 +117,14 @@ async def create_print_job(
         with open(disk_path, "wb") as f:
             f.write(await file.read())
         try:
-            reader = PdfReader(disk_path)
-            total_doc_pages = len(reader.pages)
+            pages_to_print = slice_pdf_pages(disk_path, page_range)
+        except HTTPException:
+            raise
         except Exception:
-            os.remove(disk_path)
+            if os.path.exists(disk_path):
+                os.remove(disk_path)
             raise HTTPException(status_code=400, detail="Corrupted or encrypted PDF file.")
     else:
-        # Convert uploaded image (.jpg/.png) to a 1-page PDF using Pillow
         temp_img_path = os.path.join(DOCS_DIR, f"{unique_id}{ext}")
         with open(temp_img_path, "wb") as f:
             f.write(await file.read())
@@ -122,14 +132,12 @@ async def create_print_job(
             img = Image.open(temp_img_path).convert("RGB")
             img.save(disk_path, "PDF", resolution=100.0)
             os.remove(temp_img_path)
-            total_doc_pages = 1
+            pages_to_print = 1
         except Exception:
             if os.path.exists(temp_img_path):
                 os.remove(temp_img_path)
             raise HTTPException(status_code=400, detail="Invalid image file.")
 
-    # 4. Calculate effective pages & total cost
-    pages_to_print = parse_page_range_count(page_range, total_doc_pages)
     total_amount = calculate_print_cost(
         pages_to_print=pages_to_print,
         copies=copies,
@@ -138,7 +146,6 @@ async def create_print_job(
         pricing=shop.pricing
     )
 
-    # 5. Store PrintJob in MySQL
     new_job = models.PrintJob(
         job_id=unique_id,
         shop_id=shop_id,
@@ -162,7 +169,6 @@ async def create_print_job(
 
 @router.get("/shop/{shop_id}", response_model=List[schemas.PrintJobResponse])
 def get_shop_print_queue(shop_id: str, db: Session = Depends(get_db)):
-    """Returns all print jobs for a specific shop (newest first)."""
     jobs = (
         db.query(models.PrintJob)
         .filter(models.PrintJob.shop_id == shop_id)
@@ -174,7 +180,6 @@ def get_shop_print_queue(shop_id: str, db: Session = Depends(get_db)):
 
 @router.patch("/{job_id}/pay", response_model=schemas.PrintJobResponse)
 def mark_job_as_paid(job_id: str, db: Session = Depends(get_db)):
-    """Marks a print job as PAID (triggered after payment checkout)."""
     job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Print job not found.")
@@ -183,14 +188,13 @@ def mark_job_as_paid(job_id: str, db: Session = Depends(get_db)):
     db.refresh(job)
     return job
 
+
 @router.patch("/{job_id}/complete", response_model=schemas.PrintJobResponse)
 def mark_job_as_completed(job_id: str, db: Session = Depends(get_db)):
-    """Marks a print job as COMPLETED and deletes the physical PDF for privacy."""
     job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Print job not found.")
 
-    # Delete physical file from uploads/documents/ for privacy
     filename = os.path.basename(job.file_path)
     disk_path = os.path.join(DOCS_DIR, filename)
     if os.path.exists(disk_path):
