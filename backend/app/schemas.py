@@ -61,3 +61,16 @@ class PaymentVerifyRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+
+class ShopLoginRequest(BaseModel):
+    password: str
+
+class ShopAuthResponse(BaseModel):
+    token: str
+    shop_id: str
+
+class ShopPricingUpdate(BaseModel):
+    bw_single_price: float
+    bw_double_price: float
+    color_single_price: float
+    color_double_price: float

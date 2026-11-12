@@ -1,3 +1,8 @@
+
+import hmac
+import hashlib
+import base64
+from fastapi import Header
 import os
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException
@@ -51,4 +56,59 @@ def get_shop_details(shop_id: str, db: Session = Depends(get_db)):
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id, models.Shop.is_active == True).first()
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found or inactive.")
+    return shop
+
+SECRET_KEY = os.getenv("JWT_SECRET", "printease-super-secret-jwt-key-2026")
+DEFAULT_SHOP_PIN = os.getenv("SHOP_ADMIN_PIN", "1234")
+
+
+def create_shop_token(shop_id: str) -> str:
+    sig = hmac.new(SECRET_KEY.encode(), shop_id.encode(), hashlib.sha256).hexdigest()
+    raw = f"{shop_id}.{sig}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def verify_shop_token(shop_id: str, authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authentication token.")
+    token = authorization.split(" ")[1]
+    expected = create_shop_token(shop_id)
+    if not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=403, detail="Unauthorized access to this shop.")
+
+
+@router.post("/{shop_id}/login", response_model=schemas.ShopAuthResponse)
+def login_shop_owner(shop_id: str, body: schemas.ShopLoginRequest, db: Session = Depends(get_db)):
+    """Verifies shopkeeper PIN/password (default: 1234) and returns a signed token."""
+    shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found.")
+
+    if body.password != DEFAULT_SHOP_PIN:
+        raise HTTPException(status_code=401, detail="Invalid Shop PIN / Password (default is 1234).")
+
+    return {"token": create_shop_token(shop_id), "shop_id": shop_id}
+
+
+@router.put("/{shop_id}/pricing", response_model=schemas.ShopResponse)
+def update_shop_pricing(
+    shop_id: str,
+    pricing_in: schemas.ShopPricingUpdate,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Protected endpoint allowing authenticated shopkeepers to update per-page rates live."""
+    verify_shop_token(shop_id, authorization)
+
+    shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
+    if not shop or not shop.pricing:
+        raise HTTPException(status_code=404, detail="Shop or pricing not found.")
+
+    shop.pricing.bw_single_price = pricing_in.bw_single_price
+    shop.pricing.bw_double_price = pricing_in.bw_double_price
+    shop.pricing.color_single_price = pricing_in.color_single_price
+    shop.pricing.color_double_price = pricing_in.color_double_price
+
+    db.commit()
+    db.refresh(shop)
     return shop
