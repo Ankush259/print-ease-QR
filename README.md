@@ -9,6 +9,9 @@ A multi-tenant QR-based print automation web platform that eliminates WhatsApp a
 ### 1. Customer Scan-to-Print Mobile Portal (`/shop/:shopId`)
 ![Customer Portal UI](screenshots/customer-portal.png)
 
+### 2. Razorpay Payment Gateway Integration (HMAC-SHA256 Verified)
+![Razorpay Checkout UI](screenshots/razorpay-checkout.png)
+
 ### 2. Shopkeeper QR & Live Print Queue Dashboard (`/dashboard/:shopId`)
 ![Shopkeeper Dashboard UI](screenshots/shop-dashboard.png)
 
@@ -34,3 +37,16 @@ python -m venv venv
 source venv/Scripts/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+
+### 2. Frontend (React + Vite)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 3. Local Auto-Print Agent
+```bash
+cd print-agent
+python agent.py
+```
