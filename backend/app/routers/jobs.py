@@ -1,3 +1,8 @@
+import hmac
+import hashlib
+import json
+import base64
+import urllib.request
 import os
 import uuid
 from typing import List
@@ -188,6 +193,85 @@ def mark_job_as_paid(job_id: str, db: Session = Depends(get_db)):
     db.refresh(job)
     return job
 
+@router.post("/{job_id}/create-order", response_model=schemas.RazorpayOrderResponse)
+def create_razorpay_order(job_id: str, db: Session = Depends(get_db)):
+    """Creates a Razorpay Order in paise (or a Demo Order if test keys aren't set)."""
+    job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Print job not found.")
+
+    amount_paise = int(round(job.calculated_amount * 100))
+    key_id = os.getenv("RAZORPAY_KEY_ID", "rzp_test_your_key_here")
+    key_secret = os.getenv("RAZORPAY_KEY_SECRET", "your_secret_here")
+
+    # Fallback to interactive Demo Mode if real Razorpay keys are not configured
+    if key_id == "rzp_test_your_key_here" or not key_secret:
+        return {
+            "order_id": f"order_demo_{job.job_id[:8]}",
+            "amount": amount_paise,
+            "currency": "INR",
+            "key_id": "demo_key",
+            "demo_mode": True
+        }
+
+    # Call official Razorpay Orders API
+    payload = json.dumps({
+        "amount": amount_paise,
+        "currency": "INR",
+        "receipt": f"rcpt_{job.job_id[:8]}"
+    }).encode("utf-8")
+
+    credentials = f"{key_id}:{key_secret}"
+    encoded_creds = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.razorpay.com/v1/orders",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {encoded_creds}"
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            order_data = json.loads(resp.read().decode("utf-8"))
+            return {
+                "order_id": order_data["id"],
+                "amount": order_data["amount"],
+                "currency": order_data["currency"],
+                "key_id": key_id,
+                "demo_mode": False
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Razorpay Order creation failed: {str(e)}")
+
+
+@router.post("/{job_id}/verify-payment", response_model=schemas.PrintJobResponse)
+def verify_razorpay_payment(
+    job_id: str,
+    payment: schemas.PaymentVerifyRequest,
+    db: Session = Depends(get_db)
+):
+    """Verifies HMAC-SHA256 signature from Razorpay Checkout and marks job PAID."""
+    job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Print job not found.")
+
+    key_secret = os.getenv("RAZORPAY_KEY_SECRET", "your_secret_here")
+
+    if not payment.razorpay_order_id.startswith("order_demo_"):
+        msg = f"{payment.razorpay_order_id}|{payment.razorpay_payment_id}".encode("utf-8")
+        generated_sig = hmac.new(key_secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(generated_sig, payment.razorpay_signature):
+            job.payment_status = "FAILED"
+            db.commit()
+            raise HTTPException(status_code=400, detail="Invalid Razorpay payment signature.")
+
+    job.payment_status = "PAID"
+    db.commit()
+    db.refresh(job)
+    return job
 
 @router.patch("/{job_id}/complete", response_model=schemas.PrintJobResponse)
 def mark_job_as_completed(job_id: str, db: Session = Depends(get_db)):

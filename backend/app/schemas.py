@@ -49,3 +49,15 @@ class PrintJobResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class RazorpayOrderResponse(BaseModel):
+    order_id: str
+    amount: int          # Amount in paise (e.g., ₹10.00 = 1000)
+    currency: str
+    key_id: str
+    demo_mode: bool = False
+
+class PaymentVerifyRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str

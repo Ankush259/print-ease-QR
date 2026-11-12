@@ -72,10 +72,56 @@ export default function CustomerPortal() {
   const handlePayNow = async () => {
     if (!createdJob) return;
     try {
-      const res = await axios.patch(`${API_BASE}/api/jobs/${createdJob.job_id}/pay`);
-      setCreatedJob(res.data);
-    } catch {
-      alert("Payment update failed");
+      const { data: order } = await axios.post(
+        `${API_BASE}/api/jobs/${createdJob.job_id}/create-order`
+      );
+
+      // If using placeholder keys, simulate Razorpay UPI verification
+      if (order.demo_mode) {
+        const res = await axios.post(
+          `${API_BASE}/api/jobs/${createdJob.job_id}/verify-payment`,
+          {
+            razorpay_order_id: order.order_id,
+            razorpay_payment_id: `pay_demo_${Date.now()}`,
+            razorpay_signature: "demo_signature_verified",
+          }
+        );
+        setCreatedJob(res.data);
+        return;
+      }
+
+      // Open Official Razorpay Checkout Popup
+      const options = {
+        prefill: {
+          name: "Walk-in Customer",
+          email: "customer@printease.local",
+          contact: "9876543210",
+        },
+        theme: { color: "#4f46e5" },
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: shop.shop_name,
+        description: `Print Job (${createdJob.total_pages} pages, ${createdJob.color_mode})`,
+        order_id: order.order_id,
+        handler: async function (response) {
+          const verifyRes = await axios.post(
+            `${API_BASE}/api/jobs/${createdJob.job_id}/verify-payment`,
+            {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            }
+          );
+          setCreatedJob(verifyRes.data);
+        },
+        theme: { color: "#4f46e5" },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (err) {
+      alert(err.response?.data?.detail || "Payment gateway initialization failed");
     }
   };
 
