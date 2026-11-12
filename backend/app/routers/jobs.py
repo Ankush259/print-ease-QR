@@ -139,47 +139,64 @@ async def create_print_job(
     copies: int = Form(1),
     page_range: str = Form("ALL"),
     paper_size: str = Form("A4"),
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id, models.Shop.is_active == True).first()
     if not shop or not shop.pricing:
         raise HTTPException(status_code=404, detail="Shop or shop pricing not found.")
 
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in [".pdf", ".png", ".jpg", ".jpeg"]:
-        raise HTTPException(status_code=400, detail="Only PDF, PNG, and JPG files are supported.")
+    if not files:
+        raise HTTPException(status_code=400, detail="Please attach at least one file.")
 
     unique_id = str(uuid.uuid4())
     saved_filename = f"{unique_id}.pdf"
     disk_path = os.path.join(DOCS_DIR, saved_filename)
 
-    if ext == ".pdf":
-        with open(disk_path, "wb") as f:
-            f.write(await file.read())
-        try:
-            pages_to_print = slice_pdf_pages(disk_path, page_range)
-        except HTTPException:
-            if os.path.exists(disk_path):
-                os.remove(disk_path)
-            raise
-        except Exception as e:
-            if os.path.exists(disk_path):
-                os.remove(disk_path)
-            raise HTTPException(status_code=400, detail=f"PDF processing error: {str(e)}")
-    else:
-        temp_img_path = os.path.join(DOCS_DIR, f"{unique_id}{ext}")
-        with open(temp_img_path, "wb") as f:
-            f.write(await file.read())
-        try:
-            img = Image.open(temp_img_path).convert("RGB")
-            img.save(disk_path, "PDF", resolution=100.0)
-            os.remove(temp_img_path)
-            pages_to_print = 1
-        except Exception:
-            if os.path.exists(temp_img_path):
-                os.remove(temp_img_path)
-            raise HTTPException(status_code=400, detail="Invalid image file.")
+    merger = PdfWriter()
+    temp_files = []
+
+    try:
+        for idx, upload in enumerate(files):
+            ext = os.path.splitext(upload.filename)[1].lower()
+            if ext not in [".pdf", ".png", ".jpg", ".jpeg"]:
+                raise HTTPException(status_code=400, detail=f"Unsupported file: {upload.filename}")
+
+            part_path = os.path.join(DOCS_DIR, f"{unique_id}_part{idx}.pdf")
+            temp_files.append(part_path)
+
+            if ext == ".pdf":
+                with open(part_path, "wb") as f:
+                    f.write(await upload.read())
+            else:
+                raw_img_path = os.path.join(DOCS_DIR, f"{unique_id}_img{idx}{ext}")
+                temp_files.append(raw_img_path)
+                with open(raw_img_path, "wb") as f:
+                    f.write(await upload.read())
+                img = Image.open(raw_img_path).convert("RGB")
+                img.save(part_path, "PDF", resolution=100.0)
+
+            with open(part_path, "rb") as pdf_in:
+                reader = PdfReader(pdf_in)
+                for page in reader.pages:
+                    merger.add_page(page)
+
+        with open(disk_path, "wb") as merged_out:
+            merger.write(merged_out)
+
+        pages_to_print = slice_pdf_pages(disk_path, page_range)
+    except HTTPException:
+        if os.path.exists(disk_path):
+            os.remove(disk_path)
+        raise
+    except Exception as e:
+        if os.path.exists(disk_path):
+            os.remove(disk_path)
+        raise HTTPException(status_code=400, detail=f"Document merge error: {str(e)}")
+    finally:
+        for t_path in temp_files:
+            if os.path.exists(t_path):
+                os.remove(t_path)
 
     total_amount = calculate_print_cost(
         pages_to_print=pages_to_print,
@@ -189,10 +206,16 @@ async def create_print_job(
         pricing=shop.pricing
     )
 
+    display_name = (
+        files[0].filename
+        if len(files) == 1
+        else f"{files[0].filename} (+{len(files) - 1} merged)"
+    )
+
     new_job = models.PrintJob(
         job_id=unique_id,
         shop_id=shop_id,
-        file_name=file.filename,
+        file_name=display_name,
         file_path=f"/static/documents/{saved_filename}",
         total_pages=pages_to_print,
         page_range=page_range.upper(),
@@ -208,7 +231,6 @@ async def create_print_job(
     db.commit()
     db.refresh(new_job)
 
-    # Notify connected Shop Dashboard via WebSocket
     await ws_manager.broadcast(shop_id, "NEW_JOB", new_job.job_id)
     return new_job
 

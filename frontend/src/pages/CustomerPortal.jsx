@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
-import { Upload, FileText, CheckCircle2, Printer, CreditCard } from "lucide-react";
+import { Upload, CheckCircle2, Printer, CreditCard, Files } from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -9,7 +9,7 @@ export default function CustomerPortal() {
   const { shopId } = useParams();
   const [shop, setShop] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [previewUrl, setPreviewUrl] = useState(null);
 
   // Customization State
@@ -34,12 +34,14 @@ export default function CustomerPortal() {
   }, [shopId]);
 
   const handleFileChange = (e) => {
-    const selected = e.target.files[0];
-    if (!selected) return;
-    setFile(selected);
+    const selected = Array.from(e.target.files || []);
+    if (selected.length === 0) return;
+    setFiles(selected);
     setCreatedJob(null);
-    if (selected.type.startsWith("image/")) {
-      setPreviewUrl(URL.createObjectURL(selected));
+
+    const firstImg = selected.find((f) => f.type.startsWith("image/"));
+    if (firstImg) {
+      setPreviewUrl(URL.createObjectURL(firstImg));
     } else {
       setPreviewUrl(null);
     }
@@ -47,7 +49,7 @@ export default function CustomerPortal() {
 
   const handleUploadAndCalculate = async (e) => {
     e.preventDefault();
-    if (!file) return;
+    if (files.length === 0) return;
     setSubmitting(true);
 
     const formData = new FormData();
@@ -57,7 +59,7 @@ export default function CustomerPortal() {
     formData.append("copies", copies);
     formData.append("page_range", pageRange);
     formData.append("paper_size", paperSize);
-    formData.append("file", file);
+    files.forEach((f) => formData.append("files", f));
 
     try {
       const res = await axios.post(`${API_BASE}/api/jobs/upload`, formData);
@@ -76,7 +78,6 @@ export default function CustomerPortal() {
         `${API_BASE}/api/jobs/${createdJob.job_id}/create-order`
       );
 
-      // If using placeholder keys, simulate Razorpay UPI verification
       if (order.demo_mode) {
         const res = await axios.post(
           `${API_BASE}/api/jobs/${createdJob.job_id}/verify-payment`,
@@ -90,20 +91,18 @@ export default function CustomerPortal() {
         return;
       }
 
-      // Open Official Razorpay Checkout Popup
       const options = {
-        prefill: {
-          name: "Walk-in Customer",
-          email: "customer@printease.local",
-          contact: "9876543210",
-        },
-        theme: { color: "#4f46e5" },
         key: order.key_id,
         amount: order.amount,
         currency: order.currency,
         name: shop.shop_name,
         description: `Print Job (${createdJob.total_pages} pages, ${createdJob.color_mode})`,
         order_id: order.order_id,
+        prefill: {
+          name: "Walk-in Customer",
+          email: "customer@printease.local",
+          contact: "9876543210",
+        },
         handler: async function (response) {
           const verifyRes = await axios.post(
             `${API_BASE}/api/jobs/${createdJob.job_id}/verify-payment`,
@@ -148,15 +147,40 @@ export default function CustomerPortal() {
           <div>Color Double: <b>₹{shop.pricing.color_double_price}/sheet</b></div>
         </div>
 
-        {/* Step 1: File Upload */}
+        {/* Step 1: Multi-File Upload */}
         <form onSubmit={handleUploadAndCalculate} className="space-y-5">
-          <label className="flex flex-col items-center justify-center border-2 border-dashed border-indigo-300 rounded-xl p-6 cursor-pointer hover:bg-indigo-50/40 transition">
+          <label className="flex flex-col items-center justify-center border-2 border-dashed border-indigo-300 rounded-xl p-6 cursor-pointer hover:bg-indigo-50/40 transition text-center">
             <Upload className="w-8 h-8 text-indigo-500 mb-2" />
             <span className="text-sm font-medium text-slate-700">
-              {file ? file.name : "Tap to attach PDF, JPG, or PNG"}
+              {files.length === 0
+                ? "Tap to attach 1 or more PDFs, JPGs, or PNGs"
+                : `${files.length} file(s) attached (Auto-Merged)`}
             </span>
-            <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={handleFileChange} className="hidden" />
+            <span className="text-[11px] text-slate-400 mt-1">
+              Multiple files are merged automatically into one print job
+            </span>
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.png,.jpg,.jpeg"
+              onChange={handleFileChange}
+              className="hidden"
+            />
           </label>
+
+          {/* Attached File List */}
+          {files.length > 0 && (
+            <div className="bg-slate-50 border rounded-xl p-3 space-y-1">
+              <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                <Files className="w-3.5 h-3.5 text-indigo-600" /> Attached Documents:
+              </p>
+              {files.map((f, idx) => (
+                <div key={idx} className="text-xs text-slate-700 truncate">
+                  {idx + 1}. {f.name}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Live Image Preview with B&W Filter */}
           {previewUrl && (
@@ -171,7 +195,7 @@ export default function CustomerPortal() {
           )}
 
           {/* Step 2: Customization Options */}
-          {file && (
+          {files.length > 0 && (
             <div className="space-y-4 pt-2">
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -241,7 +265,7 @@ export default function CustomerPortal() {
                 disabled={submitting}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl shadow transition"
               >
-                {submitting ? "Calculating Pages & Cost..." : "Calculate Exact Price"}
+                {submitting ? "Merging & Calculating Cost..." : "Calculate Exact Price"}
               </button>
             </div>
           )}

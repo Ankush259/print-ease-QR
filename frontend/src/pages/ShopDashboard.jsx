@@ -206,6 +206,11 @@ export default function ShopDashboard() {
     );
   }
 
+  // PART 1 ADDED HERE: Live Shop Revenue & Print Volume Calculations
+  const paidJobs = jobs.filter((j) => j.payment_status === "PAID");
+  const totalRevenue = paidJobs.reduce((sum, j) => sum + j.calculated_amount, 0);
+  const totalPagesPrinted = paidJobs.reduce((sum, j) => sum + j.total_pages * j.copies, 0);
+
   return (
     <div className="min-h-screen bg-slate-100 p-6">
       <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -349,6 +354,22 @@ export default function ShopDashboard() {
               >
                 <RefreshCw className="w-3.5 h-3.5" /> Refresh
               </button>
+            </div>
+          </div>
+
+          {/* PART 2 ADDED HERE: 3-Card Live Shop Revenue & Volume Analytics Bar */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+              <p className="text-[11px] font-semibold uppercase text-emerald-700">Paid Revenue</p>
+              <p className="text-xl font-bold text-emerald-900">₹{totalRevenue.toFixed(2)}</p>
+            </div>
+            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
+              <p className="text-[11px] font-semibold uppercase text-indigo-700">Paid Orders</p>
+              <p className="text-xl font-bold text-indigo-900">{paidJobs.length} jobs</p>
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <p className="text-[11px] font-semibold uppercase text-slate-600">Total Pages</p>
+              <p className="text-xl font-bold text-slate-900">{totalPagesPrinted} pgs</p>
             </div>
           </div>
 
