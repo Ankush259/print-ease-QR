@@ -12,12 +12,13 @@ import {
   Volume2,
   VolumeX,
   Wifi,
+  CheckCircle,
+  Trash2,
 } from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8000";
 const WS_BASE = "ws://127.0.0.1:8000";
 
-// Synthesizes a clean two-tone notification chime using the browser's Web Audio API
 function playNotificationChime() {
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -27,8 +28,8 @@ function playNotificationChime() {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
-    osc.frequency.setValueAtTime(587.33, now); // D5
-    osc.frequency.setValueAtTime(880, now + 0.12); // A5
+    osc.frequency.setValueAtTime(587.33, now);
+    osc.frequency.setValueAtTime(880, now + 0.12);
 
     gain.gain.setValueAtTime(0.18, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
@@ -47,6 +48,7 @@ export default function ShopDashboard() {
   const [shop, setShop] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [queueTab, setQueueTab] = useState("QUEUED"); // "QUEUED" or "COMPLETED"
 
   // WebSocket & Audio State
   const [wsConnected, setWsConnected] = useState(false);
@@ -108,7 +110,6 @@ export default function ShopDashboard() {
     fetchShopDetails();
     fetchJobsOnly();
 
-    // Connect to FastAPI Real-Time WebSocket
     const ws = new WebSocket(`${WS_BASE}/api/jobs/ws/${shopId}`);
 
     ws.onopen = () => setWsConnected(true);
@@ -170,6 +171,15 @@ export default function ShopDashboard() {
     }
   };
 
+  const handleCompleteJob = async (jobId) => {
+    try {
+      await axios.patch(`${API_BASE}/api/jobs/${jobId}/complete`);
+      fetchJobsOnly();
+    } catch (err) {
+      alert(err.response?.data?.detail || "Failed to mark job completed");
+    }
+  };
+
   if (loading) return <div className="p-8 text-center">Loading Shop Dashboard...</div>;
   if (!shop) return <div className="p-8 text-center text-red-600">Shop not found</div>;
 
@@ -206,10 +216,14 @@ export default function ShopDashboard() {
     );
   }
 
-  // PART 1 ADDED HERE: Live Shop Revenue & Print Volume Calculations
+  // Live Shop Revenue & Print Volume Analytics
   const paidJobs = jobs.filter((j) => j.payment_status === "PAID");
   const totalRevenue = paidJobs.reduce((sum, j) => sum + j.calculated_amount, 0);
   const totalPagesPrinted = paidJobs.reduce((sum, j) => sum + j.total_pages * j.copies, 0);
+
+  const activeJobs = jobs.filter((j) => j.print_status === "QUEUED");
+  const completedJobs = jobs.filter((j) => j.print_status === "COMPLETED");
+  const displayedJobs = queueTab === "QUEUED" ? activeJobs : completedJobs;
 
   return (
     <div className="min-h-screen bg-slate-100 p-6">
@@ -357,7 +371,7 @@ export default function ShopDashboard() {
             </div>
           </div>
 
-          {/* PART 2 ADDED HERE: 3-Card Live Shop Revenue & Volume Analytics Bar */}
+          {/* 3-Card Live Shop Revenue & Volume Analytics Bar */}
           <div className="grid grid-cols-3 gap-3">
             <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
               <p className="text-[11px] font-semibold uppercase text-emerald-700">Paid Revenue</p>
@@ -373,14 +387,42 @@ export default function ShopDashboard() {
             </div>
           </div>
 
-          {jobs.length === 0 ? (
-            <p className="text-sm text-slate-500 py-8 text-center">No print jobs in queue yet.</p>
+          {/* Queue Status Filter Tabs */}
+          <div className="flex gap-2 border-b pb-2 text-xs font-semibold">
+            <button
+              onClick={() => setQueueTab("QUEUED")}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                queueTab === "QUEUED"
+                  ? "bg-indigo-600 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              Active Queue ({activeJobs.length})
+            </button>
+            <button
+              onClick={() => setQueueTab("COMPLETED")}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                queueTab === "COMPLETED"
+                  ? "bg-slate-800 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              Completed & Wiped ({completedJobs.length})
+            </button>
+          </div>
+
+          {displayedJobs.length === 0 ? (
+            <p className="text-sm text-slate-500 py-8 text-center">
+              {queueTab === "QUEUED"
+                ? "No active print jobs waiting in queue."
+                : "No completed jobs yet."}
+            </p>
           ) : (
             <div className="space-y-3">
-              {jobs.map((job) => (
+              {displayedJobs.map((job) => (
                 <div
                   key={job.job_id}
-                  className="border rounded-xl p-4 flex items-center justify-between hover:bg-slate-50 transition"
+                  className="border rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 hover:bg-slate-50 transition"
                 >
                   <div className="space-y-1">
                     <p className="font-semibold text-sm text-slate-900">{job.file_name}</p>
@@ -388,25 +430,47 @@ export default function ShopDashboard() {
                       {job.total_pages} pg • {job.copies} copies • <b>{job.color_mode}</b> • {job.sides} • Range:{" "}
                       {job.page_range}
                     </p>
-                    <span
-                      className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded ${
-                        job.payment_status === "PAID"
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-amber-100 text-amber-800"
-                      }`}
-                    >
-                      {job.payment_status} — ₹{job.calculated_amount}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded ${
+                          job.payment_status === "PAID"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-amber-100 text-amber-800"
+                        }`}
+                      >
+                        {job.payment_status} — ₹{job.calculated_amount}
+                      </span>
+                      {job.print_status === "COMPLETED" && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                          <Trash2 className="w-3 h-3" /> PDF Wiped for Privacy
+                        </span>
+                      )}
+                    </div>
                   </div>
 
-                  <a
-                    href={`${API_BASE}${job.file_path}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow"
-                  >
-                    Open & Print PDF
-                  </a>
+                  {job.print_status === "QUEUED" ? (
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`${API_BASE}${job.file_path}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3.5 py-2.5 rounded-lg shadow"
+                      >
+                        Open & Print PDF
+                      </a>
+                      <button
+                        onClick={() => handleCompleteJob(job.job_id)}
+                        title="Mark printed and wipe customer PDF from server"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2.5 rounded-lg shadow flex items-center gap-1"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" /> Done & Wipe
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1">
+                      <CheckCircle className="w-4 h-4" /> Printed
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
