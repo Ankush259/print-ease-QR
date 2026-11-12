@@ -1,15 +1,57 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import axios from "axios";
-import { Printer, RefreshCw, ExternalLink, Lock, Settings, Check, LogOut } from "lucide-react";
+import {
+  Printer,
+  RefreshCw,
+  ExternalLink,
+  Lock,
+  Settings,
+  Check,
+  LogOut,
+  Volume2,
+  VolumeX,
+  Wifi,
+} from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8000";
+const WS_BASE = "ws://127.0.0.1:8000";
+
+// Synthesizes a clean two-tone notification chime using the browser's Web Audio API
+function playNotificationChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(587.33, now); // D5
+    osc.frequency.setValueAtTime(880, now + 0.12); // A5
+
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.45);
+  } catch (e) {
+    console.warn("Audio chime blocked until user interacts with page:", e);
+  }
+}
 
 export default function ShopDashboard() {
   const { shopId } = useParams();
   const [shop, setShop] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // WebSocket & Audio State
+  const [wsConnected, setWsConnected] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const soundEnabledRef = useRef(true);
 
   // Auth State
   const storageKey = `printease_token_${shopId}`;
@@ -27,7 +69,13 @@ export default function ShopDashboard() {
   const [savingRates, setSavingRates] = useState(false);
   const [savedBanner, setSavedBanner] = useState(false);
 
-  // 1. Load shop info and rate card ONLY ONCE on initial load
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    soundEnabledRef.current = next;
+    if (next) playNotificationChime();
+  };
+
   const fetchShopDetails = async () => {
     try {
       const shopRes = await axios.get(`${API_BASE}/api/shops/${shopId}`);
@@ -47,21 +95,35 @@ export default function ShopDashboard() {
     }
   };
 
-  // 2. Poll ONLY the print queue every 4 seconds (never overwrites rate inputs)
   const fetchJobsOnly = async () => {
     try {
       const jobsRes = await axios.get(`${API_BASE}/api/jobs/shop/${shopId}`);
       setJobs(jobsRes.data);
     } catch (err) {
-      console.error("Jobs polling error:", err);
+      console.error("Jobs fetch error:", err);
     }
   };
 
   useEffect(() => {
     fetchShopDetails();
     fetchJobsOnly();
-    const interval = setInterval(fetchJobsOnly, 4000);
-    return () => clearInterval(interval);
+
+    // Connect to FastAPI Real-Time WebSocket
+    const ws = new WebSocket(`${WS_BASE}/api/jobs/ws/${shopId}`);
+
+    ws.onopen = () => setWsConnected(true);
+    ws.onclose = () => setWsConnected(false);
+    ws.onerror = () => setWsConnected(false);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      fetchJobsOnly();
+      if ((data.event === "NEW_JOB" || data.event === "JOB_PAID") && soundEnabledRef.current) {
+        playNotificationChime();
+      }
+    };
+
+    return () => ws.close();
   }, [shopId]);
 
   const handleLogin = async (e) => {
@@ -111,7 +173,6 @@ export default function ShopDashboard() {
   if (loading) return <div className="p-8 text-center">Loading Shop Dashboard...</div>;
   if (!shop) return <div className="p-8 text-center text-red-600">Shop not found</div>;
 
-  // Render PIN Login Gate if not authenticated
   if (!token) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
@@ -246,17 +307,49 @@ export default function ShopDashboard() {
 
         {/* Right Column: Live Print Queue */}
         <div className="md:col-span-2 bg-white rounded-2xl shadow p-6 space-y-4">
-          <div className="flex items-center justify-between border-b pb-3">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
+            <div className="flex items-center gap-2.5">
               <Printer className="w-5 h-5 text-indigo-600" />
-              Live Print Queue
-            </h2>
-            <button
-              onClick={fetchJobsOnly}
-              className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg flex items-center gap-1"
-            >
-              <RefreshCw className="w-3.5 h-3.5" /> Refresh
-            </button>
+              <h2 className="text-lg font-bold text-slate-900">Live Print Queue</h2>
+              <span
+                className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                  wsConnected
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-amber-100 text-amber-800"
+                }`}
+              >
+                <Wifi className="w-3 h-3" />
+                {wsConnected ? "Live WebSocket" : "Reconnecting..."}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={toggleSound}
+                className={`text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 font-medium transition ${
+                  soundEnabled
+                    ? "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                {soundEnabled ? (
+                  <>
+                    <Volume2 className="w-3.5 h-3.5" /> Sound On
+                  </>
+                ) : (
+                  <>
+                    <VolumeX className="w-3.5 h-3.5" /> Muted
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={fetchJobsOnly}
+                className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg flex items-center gap-1"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Refresh
+              </button>
+            </div>
           </div>
 
           {jobs.length === 0 ? (

@@ -1,12 +1,12 @@
+import os
+import uuid
 import hmac
 import hashlib
 import json
 import base64
 import urllib.request
-import os
-import uuid
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from typing import List, Dict
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from pypdf import PdfReader, PdfWriter
 from PIL import Image
@@ -19,49 +19,85 @@ DOCS_DIR = "uploads/documents"
 os.makedirs(DOCS_DIR, exist_ok=True)
 
 
+# --- Real-Time WebSocket Connection Manager ---
+class ShopConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, shop_id: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.setdefault(shop_id, []).append(websocket)
+
+    def disconnect(self, shop_id: str, websocket: WebSocket):
+        if shop_id in self.active_connections:
+            if websocket in self.active_connections[shop_id]:
+                self.active_connections[shop_id].remove(websocket)
+
+    async def broadcast(self, shop_id: str, event_type: str, job_id: str):
+        for ws in list(self.active_connections.get(shop_id, [])):
+            try:
+                await ws.send_json({"event": event_type, "job_id": job_id})
+            except Exception:
+                self.disconnect(shop_id, ws)
+
+
+ws_manager = ShopConnectionManager()
+
+
+@router.websocket("/ws/{shop_id}")
+async def shop_queue_websocket(websocket: WebSocket, shop_id: str):
+    """Persistent WebSocket channel for real-time shopkeeper queue updates."""
+    await ws_manager.connect(shop_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(shop_id, websocket)
+
+
 def slice_pdf_pages(disk_path: str, page_range_str: str) -> int:
     """
     Validates page_range_str (e.g. 'ALL' or '1-3, 5'), physically slices the PDF
     on disk so only those pages remain for printing, and returns the page count.
     """
-    reader = PdfReader(disk_path)
-    max_pages = len(reader.pages)
+    with open(disk_path, "rb") as in_file:
+        reader = PdfReader(in_file)
+        max_pages = len(reader.pages)
 
-    cleaned = page_range_str.strip().upper()
-    if not cleaned or cleaned == "ALL":
-        return max_pages
+        cleaned = page_range_str.strip().upper()
+        if not cleaned or cleaned == "ALL":
+            return max_pages
 
-    selected_pages = []
-    seen = set()
-    try:
-        parts = cleaned.split(",")
-        for part in parts:
-            part = part.strip()
-            if "-" in part:
-                start, end = map(int, part.split("-"))
-                if start < 1 or end > max_pages or start > end:
-                    raise ValueError
-                for p in range(start, end + 1):
-                    if p not in seen:
-                        seen.add(p)
-                        selected_pages.append(p)
-            else:
-                page = int(part)
-                if page < 1 or page > max_pages:
-                    raise ValueError
-                if page not in seen:
-                    seen.add(page)
-                    selected_pages.append(page)
-    except ValueError:
-        os.remove(disk_path)
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid page range '{page_range_str}'. Document has {max_pages} pages."
-        )
+        selected_pages = []
+        seen = set()
+        try:
+            parts = cleaned.split(",")
+            for part in parts:
+                part = part.strip()
+                if "-" in part:
+                    start, end = map(int, part.split("-"))
+                    if start < 1 or end > max_pages or start > end:
+                        raise ValueError
+                    for p in range(start, end + 1):
+                        if p not in seen:
+                            seen.add(p)
+                            selected_pages.append(p)
+                else:
+                    page = int(part)
+                    if page < 1 or page > max_pages:
+                        raise ValueError
+                    if page not in seen:
+                        seen.add(page)
+                        selected_pages.append(page)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid page range '{page_range_str}'. Document has {max_pages} pages."
+            )
 
-    writer = PdfWriter()
-    for page_num in selected_pages:
-        writer.add_page(reader.pages[page_num - 1])
+        writer = PdfWriter()
+        for page_num in selected_pages:
+            writer.add_page(reader.pages[page_num - 1])
 
     with open(disk_path, "wb") as out_file:
         writer.write(out_file)
@@ -124,11 +160,13 @@ async def create_print_job(
         try:
             pages_to_print = slice_pdf_pages(disk_path, page_range)
         except HTTPException:
-            raise
-        except Exception:
             if os.path.exists(disk_path):
                 os.remove(disk_path)
-            raise HTTPException(status_code=400, detail="Corrupted or encrypted PDF file.")
+            raise
+        except Exception as e:
+            if os.path.exists(disk_path):
+                os.remove(disk_path)
+            raise HTTPException(status_code=400, detail=f"PDF processing error: {str(e)}")
     else:
         temp_img_path = os.path.join(DOCS_DIR, f"{unique_id}{ext}")
         with open(temp_img_path, "wb") as f:
@@ -169,6 +207,9 @@ async def create_print_job(
     db.add(new_job)
     db.commit()
     db.refresh(new_job)
+
+    # Notify connected Shop Dashboard via WebSocket
+    await ws_manager.broadcast(shop_id, "NEW_JOB", new_job.job_id)
     return new_job
 
 
@@ -184,14 +225,16 @@ def get_shop_print_queue(shop_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{job_id}/pay", response_model=schemas.PrintJobResponse)
-def mark_job_as_paid(job_id: str, db: Session = Depends(get_db)):
+async def mark_job_as_paid(job_id: str, db: Session = Depends(get_db)):
     job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Print job not found.")
     job.payment_status = "PAID"
     db.commit()
     db.refresh(job)
+    await ws_manager.broadcast(job.shop_id, "JOB_PAID", job.job_id)
     return job
+
 
 @router.post("/{job_id}/create-order", response_model=schemas.RazorpayOrderResponse)
 def create_razorpay_order(job_id: str, db: Session = Depends(get_db)):
@@ -204,7 +247,6 @@ def create_razorpay_order(job_id: str, db: Session = Depends(get_db)):
     key_id = os.getenv("RAZORPAY_KEY_ID", "rzp_test_your_key_here")
     key_secret = os.getenv("RAZORPAY_KEY_SECRET", "your_secret_here")
 
-    # Fallback to interactive Demo Mode if real Razorpay keys are not configured
     if key_id == "rzp_test_your_key_here" or not key_secret:
         return {
             "order_id": f"order_demo_{job.job_id[:8]}",
@@ -214,7 +256,6 @@ def create_razorpay_order(job_id: str, db: Session = Depends(get_db)):
             "demo_mode": True
         }
 
-    # Call official Razorpay Orders API
     payload = json.dumps({
         "amount": amount_paise,
         "currency": "INR",
@@ -248,7 +289,7 @@ def create_razorpay_order(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/verify-payment", response_model=schemas.PrintJobResponse)
-def verify_razorpay_payment(
+async def verify_razorpay_payment(
     job_id: str,
     payment: schemas.PaymentVerifyRequest,
     db: Session = Depends(get_db)
@@ -271,10 +312,14 @@ def verify_razorpay_payment(
     job.payment_status = "PAID"
     db.commit()
     db.refresh(job)
+
+    # Trigger instant WebSocket push + audio chime on Shopkeeper Dashboard
+    await ws_manager.broadcast(job.shop_id, "JOB_PAID", job.job_id)
     return job
 
+
 @router.patch("/{job_id}/complete", response_model=schemas.PrintJobResponse)
-def mark_job_as_completed(job_id: str, db: Session = Depends(get_db)):
+async def mark_job_as_completed(job_id: str, db: Session = Depends(get_db)):
     job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Print job not found.")
@@ -287,4 +332,5 @@ def mark_job_as_completed(job_id: str, db: Session = Depends(get_db)):
     job.print_status = "COMPLETED"
     db.commit()
     db.refresh(job)
+    await ws_manager.broadcast(job.shop_id, "JOB_COMPLETED", job.job_id)
     return job
