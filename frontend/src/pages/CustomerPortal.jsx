@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
-import { Upload, CheckCircle2, Printer, CreditCard, Files } from "lucide-react";
+import { Upload, CheckCircle2, Printer, CreditCard, Files, Sparkles, ShieldCheck } from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8000";
+const WS_BASE = "ws://127.0.0.1:8000";
 
 export default function CustomerPortal() {
   const { shopId } = useParams();
@@ -32,6 +33,21 @@ export default function CustomerPortal() {
       })
       .catch(() => setLoading(false));
   }, [shopId]);
+
+  // Listen for live print completion via WebSocket
+  useEffect(() => {
+    if (!createdJob) return;
+    const ws = new WebSocket(`${WS_BASE}/api/jobs/ws/${shopId}`);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.job_id === createdJob.job_id && data.event === "JOB_COMPLETED") {
+        setCreatedJob((prev) => (prev ? { ...prev, print_status: "COMPLETED" } : prev));
+      }
+    };
+
+    return () => ws.close();
+  }, [createdJob?.job_id, shopId]);
 
   const handleFileChange = (e) => {
     const selected = Array.from(e.target.files || []);
@@ -271,7 +287,7 @@ export default function CustomerPortal() {
           )}
         </form>
 
-        {/* Step 3: Bill Summary & Payment Checkout */}
+        {/* Step 3: Bill Summary & Live Payment/Print Status */}
         {createdJob && (
           <div className="border-t pt-4 space-y-4">
             <div className="bg-slate-100 p-4 rounded-xl space-y-1 text-sm">
@@ -297,12 +313,27 @@ export default function CustomerPortal() {
                 <CreditCard className="w-5 h-5" />
                 Pay ₹{createdJob.calculated_amount} via UPI / Gateway
               </button>
+            ) : createdJob.print_status === "COMPLETED" ? (
+              <div className="bg-indigo-50 border border-indigo-200 text-indigo-950 p-4 rounded-xl space-y-2">
+                <div className="flex items-center gap-2 font-bold text-sm text-indigo-700">
+                  <Sparkles className="w-5 h-5 text-indigo-600 shrink-0" />
+                  Printed & Ready for Pickup!
+                </div>
+                <p className="text-xs text-slate-600">
+                  Collect your printout from the counter (Token: <b>#{createdJob.job_id.slice(0, 6).toUpperCase()}</b>).
+                </p>
+                <div className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-semibold pt-1">
+                  <ShieldCheck className="w-4 h-4" /> Your file has been permanently wiped from the shop server.
+                </div>
+              </div>
             ) : (
               <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl flex items-center gap-3">
                 <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
-                <div className="text-xs">
-                  <p className="font-bold text-sm">Payment Successful!</p>
-                  <p>Your document is now in the shop's print queue (Job ID: {createdJob.job_id.slice(0, 8)}).</p>
+                <div className="text-xs space-y-0.5">
+                  <p className="font-bold text-sm">Payment Verified — In Print Queue!</p>
+                  <p>
+                    Token: <b>#{createdJob.job_id.slice(0, 6).toUpperCase()}</b> • Keep this screen open; it will notify you the moment printing completes.
+                  </p>
                 </div>
               </div>
             )}

@@ -180,6 +180,51 @@ export default function ShopDashboard() {
     }
   };
 
+  const handlePrintQrPoster = () => {
+    const posterWindow = window.open("", "_blank", "width=700,height=900");
+    if (!posterWindow) return;
+    posterWindow.document.write(`
+      <html>
+        <head>
+          <title>${shop.shop_name} - QR Standee Poster</title>
+          <style>
+            body { font-family: system-ui, sans-serif; text-align: center; padding: 40px; color: #0f172a; }
+            .card { border: 4px solid #4f46e5; border-radius: 24px; padding: 40px; max-width: 520px; margin: 0 auto; }
+            .badge { background: #e0e7ff; color: #4338ca; font-weight: 800; padding: 6px 16px; border-radius: 999px; font-size: 14px; letter-spacing: 1px; }
+            h1 { font-size: 34px; margin: 16px 0 8px; }
+            p.sub { color: #475569; font-size: 16px; margin-bottom: 24px; }
+            img { width: 280px; height: 280px; border: 2px solid #e2e8f0; padding: 12px; border-radius: 16px; }
+            .steps { text-align: left; background: #f8fafc; padding: 20px 28px; border-radius: 16px; margin: 24px 0; font-size: 15px; line-height: 1.8; }
+            .rates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 14px; background: #eef2ff; padding: 16px; border-radius: 12px; font-weight: 600; }
+            .footer { margin-top: 20px; font-size: 12px; color: #64748b; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <span class="badge">NO WHATSAPP • NO EMAIL • INSTANT PRINT</span>
+            <h1>${shop.shop_name}</h1>
+            <p class="sub">Scan QR Code to Upload & Print Documents Automatically</p>
+            <img src="${API_BASE}${shop.qr_code_path}" alt="Shop QR" />
+            <div class="steps">
+              <b>1. Scan QR Code</b> with your phone camera or any UPI app.<br/>
+              <b>2. Attach PDFs or Photos</b> and choose Black & White or Color.<br/>
+              <b>3. Pay Online</b> — your document prints automatically & deletes after printing!
+            </div>
+            <div class="rates">
+              <div>B&W Single: ₹${shop.pricing.bw_single_price}/pg</div>
+              <div>B&W Double: ₹${shop.pricing.bw_double_price}/sheet</div>
+              <div>Color Single: ₹${shop.pricing.color_single_price}/pg</div>
+              <div>Color Double: ₹${shop.pricing.color_double_price}/sheet</div>
+            </div>
+            <div class="footer">Powered by PrintEase QR • Privacy-First Auto File Wipe</div>
+          </div>
+          <script>window.onload = () => window.print();</script>
+        </body>
+      </html>
+    `);
+    posterWindow.document.close();
+  };
+
   if (loading) return <div className="p-8 text-center">Loading Shop Dashboard...</div>;
   if (!shop) return <div className="p-8 text-center text-red-600">Shop not found</div>;
 
@@ -256,6 +301,12 @@ export default function ShopDashboard() {
             >
               Open Customer Portal <ExternalLink className="w-3.5 h-3.5" />
             </Link>
+            <button
+              onClick={handlePrintQrPoster}
+              className="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1.5 transition"
+            >
+              <Printer className="w-3.5 h-3.5" /> Print A4 Shop QR Poster
+            </button>
           </div>
 
           {/* Live Rate Card Editor */}
