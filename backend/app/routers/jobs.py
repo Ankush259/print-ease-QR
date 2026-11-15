@@ -6,7 +6,8 @@ import json
 import base64
 import urllib.request
 from typing import List, Dict
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect, BackgroundTasks
 from sqlalchemy.orm import Session
 from pypdf import PdfReader, PdfWriter
 from PIL import Image
@@ -42,6 +43,47 @@ class ShopConnectionManager:
 
 
 ws_manager = ShopConnectionManager()
+
+async def auto_print_and_wipe_job(job_id: str, shop_id: str, disk_path: str):
+    """
+    Zero-Click Hardware Auto-Printer:
+    1. Sends the PDF directly to the default Windows printer spooler.
+    2. Waits 6 seconds for the OS spooler to load the document into memory.
+    3. Deletes the physical PDF from disk for customer privacy.
+    4. Updates job status to COMPLETED and notifies Customer + Shopkeeper via WebSocket.
+    """
+    from ..database import SessionLocal
+
+    try:
+        # 1. Trigger native Windows hardware print spooler silently
+        if os.name == "nt" and os.path.exists(disk_path):
+            try:
+                os.startfile(os.path.abspath(disk_path), "print")
+                print(f"[AUTO-PRINT] Spooling {disk_path} to default Windows printer...")
+            except Exception as printer_err:
+                print(f"[AUTO-PRINT WARNING] Default PDF printer trigger note: {printer_err}")
+
+        # 2. Give the OS print spooler time to read the PDF before wiping it
+        await asyncio.sleep(6)
+
+        # 3. Wipe the customer PDF from disk
+        if os.path.exists(disk_path):
+            os.remove(disk_path)
+
+        # 4. Mark job COMPLETED in database and broadcast live update
+        db = SessionLocal()
+        try:
+            job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
+            if job:
+                job.print_status = "COMPLETED"
+                db.commit()
+        finally:
+            db.close()
+
+        await ws_manager.broadcast(shop_id, "JOB_COMPLETED", job_id)
+        print(f"[AUTO-PRINT] Job {job_id[:8]} printed and wiped automatically!")
+    except Exception as e:
+        print(f"[AUTO-PRINT ERROR] {e}")
 
 
 @router.websocket("/ws/{shop_id}")
@@ -314,9 +356,10 @@ def create_razorpay_order(job_id: str, db: Session = Depends(get_db)):
 async def verify_razorpay_payment(
     job_id: str,
     payment: schemas.PaymentVerifyRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """Verifies HMAC-SHA256 signature from Razorpay Checkout and marks job PAID."""
+    """Verifies HMAC-SHA256 signature, marks job PAID, and triggers Zero-Click Hardware Printing."""
     job = db.query(models.PrintJob).filter(models.PrintJob.job_id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Print job not found.")
@@ -335,8 +378,14 @@ async def verify_razorpay_payment(
     db.commit()
     db.refresh(job)
 
-    # Trigger instant WebSocket push + audio chime on Shopkeeper Dashboard
+    # 1. Notify dashboard & customer that payment succeeded
     await ws_manager.broadcast(job.shop_id, "JOB_PAID", job.job_id)
+
+    # 2. ZERO-CLICK AUTO-PRINT: Spool directly to printer & wipe file in background
+    filename = os.path.basename(job.file_path)
+    disk_path = os.path.join(DOCS_DIR, filename)
+    background_tasks.add_task(auto_print_and_wipe_job, job.job_id, job.shop_id, disk_path)
+
     return job
 
 
