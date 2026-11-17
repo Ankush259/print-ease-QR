@@ -52,10 +52,35 @@ def register_shop(shop_data: schemas.ShopCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{shop_id}", response_model=schemas.ShopResponse)
-def get_shop_details(shop_id: str, db: Session = Depends(get_db)):
-    shop = db.query(models.Shop).filter(models.Shop.id == shop_id, models.Shop.is_active == True).first()
+def get_shop(shop_id: str, db: Session = Depends(get_db)):
+    shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
     if not shop:
-        raise HTTPException(status_code=404, detail="Shop not found or inactive.")
+        raise HTTPException(status_code=404, detail="Shop not found.")
+        
+    # Check if the physical QR code image is missing from the disk
+    disk_qr_path = shop.qr_code_path.replace("/static", "uploads")
+    if not os.path.exists(disk_qr_path):
+        print(f"QR code image missing for {shop_id}. Regenerating...")
+        
+        # Ensure the uploads/qrcodes directory exists
+        qr_dir = "uploads/qrcodes"
+        os.makedirs(qr_dir, exist_ok=True)
+        
+        # Draw a fresh QR code
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        qr.add_data(f"{frontend_url}/shop/{shop.id}")
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Save it to disk
+        new_qr_path = os.path.join(qr_dir, f"{shop.id}.png")
+        img.save(new_qr_path)
+        
+        # Update the database path just in case
+        shop.qr_code_path = f"/static/qrcodes/{shop.id}.png"
+        db.commit()
+
     return shop
 
 SECRET_KEY = os.getenv("JWT_SECRET", "printease-super-secret-jwt-key-2026")

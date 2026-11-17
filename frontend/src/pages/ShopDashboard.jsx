@@ -186,7 +186,7 @@ export default function ShopDashboard() {
     posterWindow.document.write(`
       <html>
         <head>
-          <title>${shop.shop_name} - QR Standee Poster</title>
+          <title>${shop.shop_name} QR Standee Poster</title>
           <style>
             body { font-family: system-ui, sans-serif; text-align: center; padding: 40px; color: #0f172a; }
             .card { border: 4px solid #4f46e5; border-radius: 24px; padding: 40px; max-width: 520px; margin: 0 auto; }
@@ -501,25 +501,26 @@ export default function ShopDashboard() {
 
                   {job.print_status === "QUEUED" ? (
                     <div className="flex items-center gap-2">
-                      <a
-                        href={`${API_BASE}${job.file_path}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3.5 py-2.5 rounded-lg shadow"
-                      >
-                        Open & Print PDF
-                      </a>
+                      {job.payment_status === "PAID" ? (
+                        <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-2 animate-pulse">
+                          <Printer className="w-4 h-4" /> Auto-Spooling to Printer...
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-amber-700 bg-amber-50 px-3 py-2 rounded-lg">
+                          Awaiting Customer UPI Payment...
+                        </span>
+                      )}
                       <button
                         onClick={() => handleCompleteJob(job.job_id)}
-                        title="Mark printed and wipe customer PDF from server"
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2.5 rounded-lg shadow flex items-center gap-1"
+                        title="Fallback: manually mark completed"
+                        className="text-slate-400 hover:text-emerald-600 p-2 rounded-lg transition"
                       >
-                        <CheckCircle className="w-3.5 h-3.5" /> Done & Wipe
+                        <CheckCircle className="w-4 h-4" />
                       </button>
                     </div>
                   ) : (
                     <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1">
-                      <CheckCircle className="w-4 h-4" /> Printed
+                      <CheckCircle className="w-4 h-4" /> Auto-Printed & Handed Over
                     </span>
                   )}
                 </div>
