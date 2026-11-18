@@ -5,8 +5,10 @@ import hashlib
 import json
 import base64
 import urllib.request
-from typing import List, Dict
 import asyncio
+import subprocess
+import platform
+from typing import List, Dict
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect, BackgroundTasks
 from sqlalchemy.orm import Session
 from pypdf import PdfReader, PdfWriter
@@ -45,23 +47,19 @@ class ShopConnectionManager:
 ws_manager = ShopConnectionManager()
 
 async def auto_print_and_wipe_job(job_id: str, shop_id: str, disk_path: str):
-    """
-    Zero-Click Hardware Auto-Printer:
-    1. Sends the PDF directly to the default Windows printer spooler.
-    2. Waits 6 seconds for the OS spooler to load the document into memory.
-    3. Deletes the physical PDF from disk for customer privacy.
-    4. Updates job status to COMPLETED and notifies Customer + Shopkeeper via WebSocket.
-    """
     from ..database import SessionLocal
 
     try:
-        # 1. Trigger native Windows hardware print spooler silently
-        if os.name == "nt" and os.path.exists(disk_path):
-            try:
+        # 1. Trigger native hardware print spooler based on the Operating System
+        current_os = platform.system()
+        try:
+            if current_os == "Windows":
                 os.startfile(os.path.abspath(disk_path), "print")
-                print(f"[AUTO-PRINT] Spooling {disk_path} to default Windows printer...")
-            except Exception as printer_err:
-                print(f"[AUTO-PRINT WARNING] Default PDF printer trigger note: {printer_err}")
+            elif current_os == "Darwin":  # macOS
+                subprocess.run(["lpr", disk_path], check=True)
+            print(f"[AUTO-PRINT] Spooling {disk_path} to default {current_os} printer...")
+        except Exception as printer_err:
+            print(f"[AUTO-PRINT WARNING] Spooler trigger failed: {printer_err}")
 
         # 2. Give the OS print spooler time to read the PDF before wiping it
         await asyncio.sleep(6)
