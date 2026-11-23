@@ -6,10 +6,10 @@ A full-stack, zero-click SaaS platform for print shops. Walk-in customers upload
 
 *(Replace these placeholder links with actual images once you take your final screenshots)*
 
-![Shopkeeper Dashboard & Live Queue Analytics](https://via.placeholder.com/800x400.png?text=Shopkeeper+Dashboard+Screenshot)
+![Shopkeeper Dashboard & Live Queue Analytics](screenshots/shop-dashboard.png)
 *Shopkeeper Dashboard featuring Live Queue, Revenue Analytics, and Rate Card Editor.*
 
-![Customer Mobile Portal Checkout](https://via.placeholder.com/400x500.png?text=Customer+Mobile+Portal+Screenshot)
+![Customer Mobile Portal Checkout](screenshots/customer-portal.png)
 *Customer Scan-to-Print Portal with live pricing and Razorpay integration.*
 
 ## 🚀 Key Features
