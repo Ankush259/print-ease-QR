@@ -12,6 +12,9 @@ A full-stack, zero-click SaaS platform for print shops. Walk-in customers upload
 ![Customer Mobile Portal Checkout](screenshots/customer-portal.png)
 *Customer Scan-to-Print Portal with live pricing and Razorpay integration.*
 
+![Razorpay Payment Gateway](screenshots/razorpay-checkout.png)
+*Seamless UPI, Netbanking, and Card checkout powered by Razorpay API.*
+
 ## 🚀 Key Features
 
 *   **Zero-Click Hardware Auto-Print:** Direct OS spooler integration (Windows/macOS) the millisecond payment is verified.
